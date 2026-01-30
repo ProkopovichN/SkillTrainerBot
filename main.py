@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 import asyncio
 import json
 import logging
@@ -108,6 +110,98 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+MEETING_OPTIONS = [
+    ("results", "Результаты сотрудника"),
+    ("leader", "Ожидания руководителя"),
+    ("outcome", "Ожидания результата"),
+]
+MEETING_OPTION_KEYS = {key for key, _ in MEETING_OPTIONS}
+
+
+@dataclass
+class MeetingSelectionState:
+    chat_id: int
+    message_id: int
+    selections: set[str] = field(default_factory=set)
+
+
+def build_meeting_keyboard(selections: set[str]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for key, label in MEETING_OPTIONS:
+        prefix = "✅ " if key in selections else ""
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{prefix}{label}",
+                    callback_data=f"action:meeting:toggle:{key}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Подтвердить",
+                callback_data="action:meeting:confirm",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+SELF_ASSESSMENT_QUESTIONS = [
+    "Знание политик и рекомендаций компании",
+    "Определение типа ситуации и выбор сценария встречи",
+    "Формулирование цели встречи и ожидаемого результата",
+    "Формирование повестки и планирование встречи",
+    "Отличие фактов от оценочных суждений",
+    "Объяснение последствий поведения для команды",
+    "Структурирование обратной связи (EECC)",
+    "Предположение возражений сотрудника",
+    "Выбор фокусных компетенций для развития",
+    "Установление контакта в начале встречи",
+    "Распознавание базовых эмоций по контексту",
+    "Возврат в конструктивное русло при эмоциональных проявлениях",
+    "Развивающий диалог и формирование целей развития",
+    "Работа с возражениями",
+]
+SELF_ASSESSMENT_ANSWER_KEYS = {
+    "practice": "Нужна практика 💪",
+    "confident": "Уверен ✅",
+    "unknown": "Не знаком ❓",
+}
+
+
+@dataclass
+class SelfAssessmentState:
+    chat_id: int
+    question_index: int = 0
+    answers: list[str] = field(default_factory=list)
+    question_message_id: int | None = None
+
+
+def build_self_assessment_keyboard(question_index: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=SELF_ASSESSMENT_ANSWER_KEYS["practice"],
+                    callback_data=f"action:self_assessment:answer:{question_index}:practice",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=SELF_ASSESSMENT_ANSWER_KEYS["confident"],
+                    callback_data=f"action:self_assessment:answer:{question_index}:confident",
+                ),
+                InlineKeyboardButton(
+                    text=SELF_ASSESSMENT_ANSWER_KEYS["unknown"],
+                    callback_data=f"action:self_assessment:answer:{question_index}:unknown",
+                ),
+            ],
+        ]
+    )
+
+
 async def send_chunks(
     bot: Bot,
     chat_id: int,
@@ -153,6 +247,8 @@ async def main() -> None:
     pending_lock = asyncio.Lock()
     pending_chats: set[int] = set()
     pending_notice_ts: dict[int, float] = {}
+    meeting_selection_states: dict[int, MeetingSelectionState] = {}
+    self_assessment_states: dict[int, SelfAssessmentState] = {}
 
     async def send_action_event(
         user_id: int,
@@ -160,7 +256,8 @@ async def main() -> None:
         chat_id: int,
         action: str,
         raw: dict[str, Any],
-        ) -> dict[str, Any] | None:
+        meta: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         payload = build_event_payload(
             update_id=int(raw.get("request_id") or 0),
             from_user=type("U", (), {"id": user_id, "username": username}),
@@ -168,8 +265,41 @@ async def main() -> None:
             event={"type": "action", "action": action},
             raw=raw,
             client_ts=datetime.now(timezone.utc),
+            meta=meta,
         )
         return await send_to_backend(payload)
+
+    async def send_self_assessment_question(state: SelfAssessmentState) -> None:
+        if state.question_index >= len(SELF_ASSESSMENT_QUESTIONS):
+            return
+        question_text = SELF_ASSESSMENT_QUESTIONS[state.question_index]
+        formatted_text = f"({state.question_index + 1}) {question_text}"
+        keyboard = build_self_assessment_keyboard(state.question_index)
+        if state.question_message_id:
+            try:
+                await bot.edit_message_text(
+                    chat_id=state.chat_id,
+                    message_id=state.question_message_id,
+                    text=formatted_text,
+                    reply_markup=keyboard,
+                )
+                return
+            except TelegramBadRequest:
+                state.question_message_id = None
+        message = await bot.send_message(
+            state.chat_id,
+            formatted_text,
+            reply_markup=keyboard,
+        )
+        state.question_message_id = message.message_id
+
+    async def begin_self_assessment(chat_id: int) -> None:
+        if not SELF_ASSESSMENT_QUESTIONS:
+            return
+        await bot.send_message(chat_id, "Самооценка по навыкам")
+        state = SelfAssessmentState(chat_id=chat_id)
+        self_assessment_states[chat_id] = state
+        await send_self_assessment_question(state)
 
     async def try_set_pending(chat_id: int) -> bool:
         async with pending_lock:
@@ -315,6 +445,39 @@ async def main() -> None:
 
     @dp.message(CommandStart())
     async def handle_start(message: Message) -> None:
+        intro_messages = [
+            "Привет! 👋 Я помогу тебе подготовиться к встречам с сотрудниками после performance и talent review 💼",
+            "Мы разберём сложные сценарии, потренируем фразы и структуру встреч, чтобы ты чувствовал себя увереннее 💪",
+        ]
+        for text in intro_messages:
+            await bot.send_message(message.chat.id, text)
+
+        experience_keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Новичок (до года)",
+                        callback_data="action:experience:newbie",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="1-3 года",
+                        callback_data="action:experience:1-3",
+                    ),
+                    InlineKeyboardButton(
+                        text="3+ лет",
+                        callback_data="action:experience:3plus",
+                    ),
+                ],
+            ]
+        )
+        await bot.send_message(
+            message.chat.id,
+            "Сколько у тебя опыта руководства?",
+            reply_markup=experience_keyboard,
+        )
+
         payload = build_event_payload(
             update_id=message.message_id,
             from_user=message.from_user,
@@ -327,15 +490,14 @@ async def main() -> None:
             raw=minimal_raw_message(message),
             client_ts=message.date,
         )
-        backend_resp = await send_to_backend(payload)
-        if backend_resp:
-            await answer_backend(message.chat.id, backend_resp)
-        else:
-            await bot.send_message(
-                message.chat.id,
-                settings.default_reply_text,
-                reply_markup=main_menu_keyboard(),
-            )
+
+        async def fire_start_event() -> None:
+            try:
+                await send_to_backend(payload)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("start event failed: %s", exc)
+
+        asyncio.create_task(fire_start_event())
 
     @dp.message(F.text == "/menu")
     @dp.message(F.text == "/help")
@@ -488,6 +650,137 @@ async def main() -> None:
             action_name = data.split("action:", 1)[1]
         else:
             action_name = None
+        if action_name and action_name.startswith("experience:"):
+            chat_id = callback.message.chat.id if callback.message else 0
+            prompt_text = (
+                "Какие встречи тебе предстоят? 🎯\n"
+                "Выбери одну или несколько тем:"
+            )
+            if callback.message:
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=callback.message.message_id,
+                        text=prompt_text,
+                        reply_markup=build_meeting_keyboard(set()),
+                    )
+                except TelegramBadRequest:
+                    pass
+            meeting_selection_states[chat_id] = MeetingSelectionState(
+                chat_id=chat_id,
+                message_id=callback.message.message_id if callback.message else 0,
+            )
+
+            async def fire_experience_event() -> None:
+                try:
+                    await send_action_event(
+                        user_id=callback.from_user.id,
+                        username=callback.from_user.username,
+                        chat_id=chat_id,
+                        action=action_name,
+                        raw={"id": callback.id, "data": data},
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("failed to report experience action: %s", exc)
+
+            asyncio.create_task(fire_experience_event())
+            await callback.answer()
+            return
+        if action_name and action_name.startswith("self_assessment:answer:"):
+            chat_id = callback.message.chat.id if callback.message else 0
+            parts = action_name.split(":")
+            if len(parts) != 4:
+                await callback.answer()
+                return
+            try:
+                question_index = int(parts[2])
+            except ValueError:
+                await callback.answer()
+                return
+            answer_key = parts[3]
+            if answer_key not in SELF_ASSESSMENT_ANSWER_KEYS:
+                await callback.answer()
+                return
+            state = self_assessment_states.get(chat_id)
+            if not state or state.question_index != question_index:
+                await callback.answer()
+                return
+            if state.question_message_id:
+                try:
+                    await bot.edit_message_reply_markup(
+                        chat_id=chat_id,
+                        message_id=state.question_message_id,
+                        reply_markup=None,
+                    )
+                except TelegramBadRequest:
+                    pass
+            state.answers.append(answer_key)
+            state.question_index += 1
+            if state.question_index >= len(SELF_ASSESSMENT_QUESTIONS):
+                self_assessment_states.pop(chat_id, None)
+                await bot.send_message(chat_id, "Спасибо! Я записал ответы и продолжу.")
+                await callback.answer()
+                return
+            await send_self_assessment_question(state)
+            await callback.answer()
+            return
+        if action_name and action_name.startswith("meeting:toggle:"):
+            chat_id = callback.message.chat.id if callback.message else 0
+            if chat_id:
+                state = meeting_selection_states.get(chat_id)
+                if not state:
+                    state = MeetingSelectionState(
+                        chat_id=chat_id,
+                        message_id=callback.message.message_id if callback.message else 0,
+                    )
+                option_key = action_name.split("meeting:toggle:", 1)[1]
+                if option_key not in MEETING_OPTION_KEYS:
+                    await callback.answer()
+                    return
+                if option_key in state.selections:
+                    state.selections.remove(option_key)
+                else:
+                    state.selections.add(option_key)
+                meeting_selection_states[chat_id] = state
+                if callback.message:
+                    try:
+                        await bot.edit_message_reply_markup(
+                            chat_id=chat_id,
+                            message_id=state.message_id,
+                            reply_markup=build_meeting_keyboard(state.selections),
+                        )
+                    except TelegramBadRequest:
+                        pass
+            await callback.answer()
+            return
+        if action_name == "meeting:confirm":
+            chat_id = callback.message.chat.id if callback.message else 0
+            state = meeting_selection_states.get(chat_id)
+            if not state or not state.selections:
+                await callback.answer("Выбери хотя бы одну тему", show_alert=True)
+                return
+            meeting_selection_states.pop(chat_id, None)
+            backend_resp = await send_action_event(
+                user_id=callback.from_user.id,
+                username=callback.from_user.username,
+                chat_id=chat_id,
+                action=action_name,
+                raw={
+                    "id": callback.id,
+                    "data": data,
+                    "selections": sorted(state.selections),
+                },
+                meta={"meeting_choices": sorted(state.selections)},
+            )
+            await callback.answer()
+            if callback.message:
+                await answer_backend(
+                    callback.message.chat.id,
+                    backend_resp,
+                    message_to_edit=callback.message,
+                )
+            await begin_self_assessment(chat_id)
+            return
         requires_loading = data.startswith("diag:") or action_name in {
             "diagnostic:start",
             "training:start",
