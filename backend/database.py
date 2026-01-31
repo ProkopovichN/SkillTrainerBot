@@ -101,10 +101,42 @@ def init_db():
             )
         """)
         
+        # Skill training sessions table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS skill_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                block_id TEXT NOT NULL,
+                skill_id TEXT NOT NULL,
+                situation TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP,
+                FOREIGN KEY (chat_id) REFERENCES users(chat_id)
+            )
+        """)
+        
+        # Skill training answers table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS skill_answers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                user_answer TEXT NOT NULL,
+                ai_feedback TEXT,
+                score INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES skill_sessions(id),
+                FOREIGN KEY (chat_id) REFERENCES users(chat_id)
+            )
+        """)
+        
         # Create indexes for faster queries
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_conversations_chat_id ON conversations(chat_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_skill_sessions_chat_id ON skill_sessions(chat_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_skill_answers_session_id ON skill_answers(session_id)")
         
         logger.info("Database initialized successfully")
 
@@ -331,6 +363,138 @@ class ProgressDB:
                     diagnostic_questions,
                     training_cases
                 ))
+
+
+class SkillTrainingDB:
+    """Database operations for skill training sessions."""
+    
+    @staticmethod
+    def create_session(chat_id: int, block_id: str, skill_id: str, situation: str) -> int:
+        """Create a new skill training session."""
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT INTO skill_sessions (chat_id, block_id, skill_id, situation, status)
+                   VALUES (?, ?, ?, ?, 'pending')""",
+                (chat_id, block_id, skill_id, situation)
+            )
+            return cursor.lastrowid
+    
+    @staticmethod
+    def get_session(session_id: int) -> Optional[Dict[str, Any]]:
+        """Get a skill training session by ID."""
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM skill_sessions WHERE id = ?", (session_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+    
+    @staticmethod
+    def get_pending_session(chat_id: int) -> Optional[Dict[str, Any]]:
+        """Get the current pending session for a user."""
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM skill_sessions WHERE chat_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
+                (chat_id,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+    
+    @staticmethod
+    def save_answer(session_id: int, chat_id: int, user_answer: str, ai_feedback: str = None, score: int = None) -> int:
+        """Save user's answer to a skill training session."""
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT INTO skill_answers (session_id, chat_id, user_answer, ai_feedback, score)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (session_id, chat_id, user_answer, ai_feedback, score)
+            )
+            return cursor.lastrowid
+    
+    @staticmethod
+    def complete_session(session_id: int):
+        """Mark a session as completed."""
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE skill_sessions SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (session_id,)
+            )
+    
+    @staticmethod
+    def get_user_sessions(chat_id: int, block_id: str = None, skill_id: str = None) -> List[Dict[str, Any]]:
+        """Get all sessions for a user, optionally filtered by block/skill."""
+        with get_db() as conn:
+            cursor = conn.cursor()
+            query = "SELECT * FROM skill_sessions WHERE chat_id = ?"
+            params = [chat_id]
+            
+            if block_id:
+                query += " AND block_id = ?"
+                params.append(block_id)
+            if skill_id:
+                query += " AND skill_id = ?"
+                params.append(skill_id)
+            
+            query += " ORDER BY created_at DESC"
+            cursor.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+    
+    @staticmethod
+    def get_session_answers(session_id: int) -> List[Dict[str, Any]]:
+        """Get all answers for a session."""
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM skill_answers WHERE session_id = ? ORDER BY created_at",
+                (session_id,)
+            )
+            return [dict(row) for row in cursor.fetchall()]
+    
+    @staticmethod
+    def get_user_progress(chat_id: int) -> Dict[str, Any]:
+        """Get user's overall progress across all skills."""
+        with get_db() as conn:
+            cursor = conn.cursor()
+            
+            # Total sessions
+            cursor.execute(
+                "SELECT COUNT(*) as total FROM skill_sessions WHERE chat_id = ?",
+                (chat_id,)
+            )
+            total = cursor.fetchone()["total"]
+            
+            # Completed sessions
+            cursor.execute(
+                "SELECT COUNT(*) as completed FROM skill_sessions WHERE chat_id = ? AND status = 'completed'",
+                (chat_id,)
+            )
+            completed = cursor.fetchone()["completed"]
+            
+            # Sessions by block
+            cursor.execute(
+                """SELECT block_id, COUNT(*) as count, 
+                   SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
+                   FROM skill_sessions WHERE chat_id = ? GROUP BY block_id""",
+                (chat_id,)
+            )
+            by_block = [dict(row) for row in cursor.fetchall()]
+            
+            # Average score
+            cursor.execute(
+                "SELECT AVG(score) as avg_score FROM skill_answers WHERE chat_id = ? AND score IS NOT NULL",
+                (chat_id,)
+            )
+            avg_score = cursor.fetchone()["avg_score"]
+            
+            return {
+                "total_sessions": total,
+                "completed_sessions": completed,
+                "by_block": by_block,
+                "average_score": round(avg_score, 2) if avg_score else None
+            }
 
 
 # Initialize database on module import
