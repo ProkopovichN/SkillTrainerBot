@@ -110,12 +110,46 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+EXPERIENCE_LEVEL_OPTIONS = [
+    ("newbie", "Новичок (до года)"),
+    ("1-3", "1-3 года"),
+    ("3plus", "3+ лет"),
+]
+EXPERIENCE_LEVEL_LABELS = {key: label for key, label in EXPERIENCE_LEVEL_OPTIONS}
+
 MEETING_OPTIONS = [
     ("results", "Результаты сотрудника"),
     ("leader", "Ожидания руководителя"),
     ("outcome", "Ожидания результата"),
 ]
 MEETING_OPTION_KEYS = {key for key, _ in MEETING_OPTIONS}
+MEETING_PROMPT = (
+    "Какие встречи тебе предстоят? 🎯\n"
+    "Выбери одну или несколько тем:"
+)
+
+
+def build_experience_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=EXPERIENCE_LEVEL_OPTIONS[0][1],
+                    callback_data=f"action:experience:{EXPERIENCE_LEVEL_OPTIONS[0][0]}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=EXPERIENCE_LEVEL_OPTIONS[1][1],
+                    callback_data=f"action:experience:{EXPERIENCE_LEVEL_OPTIONS[1][0]}",
+                ),
+                InlineKeyboardButton(
+                    text=EXPERIENCE_LEVEL_OPTIONS[2][1],
+                    callback_data=f"action:experience:{EXPERIENCE_LEVEL_OPTIONS[2][0]}",
+                ),
+            ],
+        ]
+    )
 
 
 @dataclass
@@ -202,6 +236,245 @@ def build_self_assessment_keyboard(question_index: int) -> InlineKeyboardMarkup:
     )
 
 
+BLOCK1_QUESTIONS = [
+    {
+        "text": "Сотрудник показывает высокие результаты 2 года подряд, но на текущей позиции меньше года. Можно ли его продвигать?",
+        "answers": [
+            {"key": "yes", "text": "Да, можно", "feedback": "✅ Точно! По политике нужен минимум 1 год на позиции перед промо."},
+            {"key": "no", "text": "Нет, нужен год на позиции", "feedback": "🤔 Политика действительно требует 1 год, если нет исключения от калибровки."},
+            {"key": "calibration", "text": "Нужно решение калибровки", "feedback": "💡 Верно: исключения через калибровку с HR обсуждаются на комиссии."},
+        ],
+        "hint": "Новый сотрудник получает продвижение только после 1 года на позиции, если нет отдельного решения.",
+    },
+    {
+        "text": "Можно ли обсудить продвижение сотрудника, если он получает высокий рейтинг по результатам, но его карьерный маркер не подтвержден?",
+        "answers": [
+            {"key": "yes", "text": "Да, можно", "feedback": "✅ Хорошо: в случае подтверждения маркера продвижение возможно."},
+            {"key": "no", "text": "Нет, нужен маркер и калибровка", "feedback": "🤔 Правильно: маркер и калибровочный процесс подтверждают, что ресурс готов."},
+            {"key": "review", "text": "Нужно решение калибровки", "feedback": "💡 Подтверждение через калибровку устраняет сомнения и фиксирует критерии."},
+        ],
+        "hint": "Карьерный маркер и калибровка важны для перехода на следующую роль.",
+    },
+    {
+        "text": "Нужно ли знакомить сотрудника с принципами EECC и ННО до самой встречи?",
+        "answers": [
+            {"key": "yes", "text": "Да, можно", "feedback": "✅ Супер: прозрачность повышает доверие и снижает стресс."},
+            {"key": "no", "text": "Нет, не обязательно", "feedback": "🤔 Часто полезно хотя бы кратко озвучить подход для понимания клиента."},
+            {"key": "default", "text": "Нужно решение калибровки", "feedback": "💡 Тема оставлена для гибкой трактовки на основе ситуации."},
+        ],
+        "hint": "Сотрудник должен понимать, как будет строиться обратная связь (тест EECC).",
+    },
+]
+
+
+@dataclass
+class Block1State:
+    chat_id: int
+    question_index: int = 0
+    question_message_id: int | None = None
+    answers: list[tuple[int, str]] = field(default_factory=list)
+
+def build_block1_keyboard(question_index: int) -> InlineKeyboardMarkup:
+    question = BLOCK1_QUESTIONS[question_index]
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for answer in question["answers"]:
+        row.append(
+            InlineKeyboardButton(
+                text=answer["text"],
+                callback_data=f"action:block1:answer:{question_index}:{answer['key']}",
+            )
+        )
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="💡 Подсказка",
+                callback_data=f"action:block1:hint:{question_index}",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_block1_feedback_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Понятно ➡️",
+                    callback_data="action:block1:next",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🏠 Главное меню",
+                    callback_data="action:post_onboarding_menu",
+                ),
+                InlineKeyboardButton(
+                    text="Пропустить блок",
+                    callback_data="action:block1:skip",
+                ),
+            ],
+        ]
+    )
+
+
+BLOCK2_CASE_OVERVIEW = [
+    "🎯 Блок 2: Подготовка к встрече",
+    "👤 Сотрудник: middle-разработчик, 2 года в компании",
+    "📊 Результаты: сроки, качество и отказ от инициатив",
+    "🗣 Калибровка: «Оберегать» — ценим как эксперта, делаем ставку на горизонтальное развитие",
+]
+
+BLOCK2_SCENARIO_OPTIONS = [
+    ("scenario1", "1️⃣ Результаты совпали или превзошли ожидания"),
+    ("scenario2", "2️⃣ Недостаточный результат вместо хорошего"),
+    ("scenario3", "3️⃣ Хороший результат вместо сверхрезультата"),
+]
+
+BLOCK2_SCENARIO_FEEDBACK = {
+    "scenario1": "✅ Верно, сценарий 1 — фокус на результатах и развитие",
+    "scenario2": "🤔 Это сценарий 2 — нужно работать над ожиданиями сотрудника",
+    "scenario3": "💡 Сценарий 3 — хорошо уточнять ценности и цели",
+}
+
+BLOCK2_AGENDA_OPTION_DEFS = [
+    ("contribution", "Признание вклада"),
+    ("review_results", "Обсуждение результатов ревью"),
+    ("feedback_zones", "Обратная связь по зонам роста"),
+    ("career_expectations", "Обсуждение карьерных ожиданий"),
+    ("idp", "План развития (ИПР)"),
+    ("salary", "Обсуждение зарплаты"),
+    ("next_steps", "Следующие шаги и договорённости"),
+]
+BLOCK2_AGENDA_LABELS = {key: label for key, label in BLOCK2_AGENDA_OPTION_DEFS}
+
+BLOCK2_FACT_STATEMENTS = [
+    "Ты не проявляешь инициативу",
+    "В последние 3 месяца ты взял 8 знакомых задач и 0 новых",
+    "Ты отказал Ивану в помощи с code review дважды",
+    "Ты не хочешь расти",
+    "На 1-1 ты сказал: «Не хочу брать ответственность за джуниоров»",
+]
+
+BLOCK2_FACT_FEEDBACK = {
+    "fact": "✅ Точно, это факт. Подкрепляй конкретными данными.",
+    "interpret": "❌ Это оценка — уточни примеры поведения и конкретные наблюдения.",
+}
+
+BLOCK2_FOCUS_COMPETENCIES = [
+    ("strategic", "Стратегическое мышление"),
+    ("team_dev", "Развитие команды"),
+    ("influence", "Влияние и коммуникация"),
+    ("decisions", "Принятие решений"),
+    ("adaptability", "Адаптивность"),
+    ("results", "Результативность"),
+]
+BLOCK2_FOCUS_LABELS = {key: label for key, label in BLOCK2_FOCUS_COMPETENCIES}
+
+
+@dataclass
+class Block2State:
+    chat_id: int
+    step: str = "intro"
+    scenario_choice: str | None = None
+    goal_text: str | None = None
+    agenda_selections: set[str] = field(default_factory=set)
+    agenda_message_id: int | None = None
+    fact_index: int = 0
+    facts_answers: list[tuple[int, str]] = field(default_factory=list)
+    fact_message_id: int | None = None
+    consequences_text: str | None = None
+    eecc_text: str | None = None
+    objections_text: str | None = None
+    focus_selections: set[str] = field(default_factory=set)
+    focus_message_id: int | None = None
+
+
+def build_block2_agenda_keyboard(state: Block2State) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for key, label in BLOCK2_AGENDA_OPTION_DEFS:
+        prefix = "✅ " if key in state.agenda_selections else ""
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{prefix}{label}",
+                    callback_data=f"action:block2:agenda:toggle:{key}",
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="➡️ Проверить",
+                callback_data="action:block2:agenda:check",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_block2_fact_keyboard(index: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Факт ✅",
+                    callback_data=f"action:block2:fact:{index}:fact",
+                ),
+                InlineKeyboardButton(
+                    text="Оценка ❌",
+                    callback_data=f"action:block2:fact:{index}:interpret",
+                ),
+            ]
+        ]
+    )
+
+
+def build_block2_fact_next_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Понятно ➡️",
+                    callback_data="action:block2:next_fact",
+                )
+            ]
+        ]
+    )
+
+
+def build_block2_focus_keyboard(state: Block2State) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for key, label in BLOCK2_FOCUS_COMPETENCIES:
+        prefix = "✅ " if key in state.focus_selections else ""
+        row.append(
+            InlineKeyboardButton(
+                text=f"{prefix}{label}",
+                callback_data=f"action:block2:focus:toggle:{key}",
+            )
+        )
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="➡️ Проверить",
+                callback_data="action:block2:focus:check",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
 async def send_chunks(
     bot: Bot,
     chat_id: int,
@@ -249,6 +522,152 @@ async def main() -> None:
     pending_notice_ts: dict[int, float] = {}
     meeting_selection_states: dict[int, MeetingSelectionState] = {}
     self_assessment_states: dict[int, SelfAssessmentState] = {}
+    block1_states: dict[int, Block1State] = {}
+    block2_states: dict[int, Block2State] = {}
+    chat_context: dict[int, dict[str, Any]] = {}
+
+    def get_chat_context(chat_id: int) -> dict[str, Any]:
+        default = {
+            "modules_unlocked": False,
+            "block1_completed": False,
+            "block2_completed": False,
+            "onboarding_done": False,
+            "current_block": None,
+            "experience_level": None,
+            "selected_scenarios": [],
+            "skill_readiness": [],
+        }
+        return chat_context.setdefault(chat_id, default)
+    LEGACY_MENU_TEXT_SNIPPETS = (
+        "Принял сообщение",
+        "Перейти к тренажёру",
+        "Начать диагностику",
+        "Напоминания",
+        "Сфера деятельности",
+    )
+    LEGACY_MENU_BUTTONS = {
+        "Перейти к тренажеру",
+        "Прогресс",
+        "В меню",
+        "Начать диагностику",
+        "Перейти к тренажеру",
+        "Напоминания",
+        "Сфера деятельности",
+    }
+
+    def is_legacy_menu_action(action: dict[str, Any]) -> bool:
+        text = str(action.get("text") or "")
+        if any(snippet in text for snippet in LEGACY_MENU_TEXT_SNIPPETS):
+            return True
+        keyboard_raw = None
+        if isinstance(action.get("keyboard"), dict):
+            keyboard_raw = action["keyboard"].get("inline")
+        else:
+            keyboard_raw = action.get("keyboard")
+        if keyboard_raw:
+            for row in keyboard_raw:
+                for item in row:
+                    label = str(item.get("text") or "").strip()
+                    if label in LEGACY_MENU_BUTTONS:
+                        return True
+        return False
+
+    async def send_post_onboarding_menu(chat_id: int, intro: str | None = None) -> None:
+        context = get_chat_context(chat_id)
+        text = intro or "Что тренировать дальше?"
+        buttons: list[list[InlineKeyboardButton]] = []
+        if context.get("block1_completed"):
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text="📋 Блок 1: Нормативы ✅",
+                        callback_data="action:start:block1",
+                    )
+                ]
+            )
+        else:
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text="📋 Блок 1: Нормативы",
+                        callback_data="action:start:block1",
+                    )
+                ]
+            )
+        if context.get("modules_unlocked"):
+            block2_label = "🎯 Блок 2: Подготовка к встрече"
+            if context.get("block2_completed"):
+                block2_label += " ✅"
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text=block2_label,
+                        callback_data="action:start:block2",
+                    ),
+                    InlineKeyboardButton(
+                        text="💬 Блок 3: Сложные моменты",
+                        callback_data="action:start:block3",
+                    ),
+                ]
+            )
+        else:
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text="🎯 Блок 2: Подготовка к встрече (скоро)",
+                        callback_data="action:start:block2",
+                    )
+                ]
+            )
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text="📊 Мой прогресс",
+                    callback_data="action:navigation:progress",
+                )
+            ]
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await bot.send_message(chat_id, text, reply_markup=keyboard)
+
+    async def send_block1_question(state: Block1State) -> None:
+        question = BLOCK1_QUESTIONS[state.question_index]
+        text = (
+            "📋 Блок 1 — Нормативы\n"
+            f"({state.question_index + 1}/{len(BLOCK1_QUESTIONS)}) {question['text']}"
+        )
+        message = await bot.send_message(
+            state.chat_id,
+            text,
+            reply_markup=build_block1_keyboard(state.question_index),
+        )
+        state.question_message_id = message.message_id
+
+    async def begin_block1(chat_id: int) -> None:
+        context = get_chat_context(chat_id)
+        context["current_block"] = 1
+        context["block1_completed"] = False
+        state = Block1State(chat_id=chat_id)
+        block1_states[chat_id] = state
+        await bot.send_message(
+            chat_id,
+            "📋 Блок 1: Нормативы компании\nУбедимся, что ты знаком с ключевыми правилами (3-5 минут).",
+        )
+        await send_block1_question(state)
+
+    async def finish_block1(chat_id: int) -> None:
+        context = get_chat_context(chat_id)
+        context["modules_unlocked"] = True
+        context["block1_completed"] = True
+        context["current_block"] = None
+        block1_states.pop(chat_id, None)
+        await bot.send_message(
+            chat_id,
+            "🎉 Отлично, Блок 1 завершён! Навыки нормативов зафиксированы.",
+        )
+        await send_post_onboarding_menu(
+            chat_id, "Что хочешь потренировать дальше?"
+        )
 
     async def send_action_event(
         user_id: int,
@@ -296,10 +715,167 @@ async def main() -> None:
     async def begin_self_assessment(chat_id: int) -> None:
         if not SELF_ASSESSMENT_QUESTIONS:
             return
+        context = get_chat_context(chat_id)
+        context["onboarding_done"] = True
         await bot.send_message(chat_id, "Самооценка по навыкам")
         state = SelfAssessmentState(chat_id=chat_id)
         self_assessment_states[chat_id] = state
         await send_self_assessment_question(state)
+
+
+    async def begin_block2(chat_id: int) -> None:
+        context = get_chat_context(chat_id)
+        if not context.get('block1_completed'):
+            await bot.send_message(chat_id, 'Сначала пройди Блок 1: нормативы.')
+            return
+        if context.get('current_block') == 2:
+            await bot.send_message(chat_id, 'Ты уже в процессе блока 2.')
+            return
+        context['current_block'] = 2
+        state = Block2State(chat_id=chat_id)
+        block2_states[chat_id] = state
+        for line in BLOCK2_CASE_OVERVIEW:
+            await bot.send_message(chat_id, line)
+        await bot.send_message(
+            chat_id,
+            '🎯 Готов начать подготовку? Нажми «Начать подготовку 🎯»',
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text='Начать подготовку 🎯',
+                            callback_data='action:block2:start',
+                        )
+                    ]
+                ]
+            ),
+        )
+
+    async def send_block2_scenario(state: Block2State) -> None:
+        state.step = 'scenario'
+        rows = [
+            [
+                InlineKeyboardButton(
+                    text=text,
+                    callback_data=f'action:block2:scenario:{key}',
+                )
+            ]
+            for key, text in BLOCK2_SCENARIO_OPTIONS
+        ]
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text='💡 Подсказка',
+                    callback_data='action:block2:scenario:hint',
+                )
+            ]
+        )
+        await bot.send_message(
+            state.chat_id,
+            'К какому типу ситуации относится этот кейс?',
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def send_block2_goal_prompt(state: Block2State) -> None:
+        state.step = 'goal'
+        await bot.send_message(
+            state.chat_id,
+            'Сформулируй цель встречи с этим сотрудником. Напиши текст или голосом.',
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text='Пример цели 💡',
+                            callback_data='action:block2:goal:example',
+                        )
+                    ]
+                ]
+            ),
+        )
+
+    async def send_block2_agenda_prompt(state: Block2State) -> None:
+        state.step = 'agenda'
+        message = await bot.send_message(
+            state.chat_id,
+            'Что важно включить в повестку? Выбери нужные пункты 👇',
+            reply_markup=build_block2_agenda_keyboard(state),
+        )
+        state.agenda_message_id = message.message_id
+
+    async def send_block2_fact_statement(state: Block2State) -> None:
+        if state.fact_index >= len(BLOCK2_FACT_STATEMENTS):
+            await send_block2_consequences_prompt(state)
+            return
+        state.step = 'fact'
+        statement = BLOCK2_FACT_STATEMENTS[state.fact_index].replace("\\n", "\n")
+        message = await bot.send_message(
+            state.chat_id,
+            f"Факт или оценка?\n{statement}",
+            reply_markup=build_block2_fact_keyboard(state.fact_index),
+        )
+        state.fact_message_id = message.message_id if hasattr(state, 'fact_message_id') else None
+
+    async def send_block2_consequences_prompt(state: Block2State) -> None:
+        state.step = 'consequences'
+        await bot.send_message(
+            state.chat_id,
+            'Как объяснишь влияние отказа от менторства на команду и компанию? Напиши пару предложений.',
+        )
+
+    async def send_block2_eecc_prompt(state: Block2State) -> None:
+        state.step = 'eecc'
+        await bot.send_message(
+            state.chat_id,
+            'Структурируй обратную связь по модели EECC: Example → Effect → Change → Continue.',
+        )
+
+    async def send_block2_objections_prompt(state: Block2State) -> None:
+        state.step = 'objections'
+        await bot.send_message(
+            state.chat_id,
+            'Какие возражения может выдвинуть сотрудник? Напиши 2-3 варианта и как ответишь.',
+        )
+
+    async def send_block2_focus_prompt(state: Block2State) -> None:
+        state.step = 'focus'
+        message = await bot.send_message(
+            state.chat_id,
+            'Выбери 2-3 фокусных компетенции для развития.',
+            reply_markup=build_block2_focus_keyboard(state),
+        )
+        state.focus_message_id = message.message_id
+
+    async def finish_block2(chat_id: int) -> None:
+        context = get_chat_context(chat_id)
+        context['current_block'] = None
+        context['block2_completed'] = True
+        block2_states.pop(chat_id, None)
+        await bot.send_message(
+            chat_id,
+            '✅ Отлично! Блок 2 завершён. Ты отработал подготовку к встречам.',
+        )
+        await send_post_onboarding_menu(chat_id, 'Что тренировать дальше?')
+
+    async def handle_block2_text_input(message: Message, state: Block2State) -> None:
+        reply = (message.text or '').strip()
+        if not reply:
+            return
+        if state.step == 'goal':
+            state.goal_text = reply
+            await bot.send_message(message.chat.id, '💬 Принял цель. Теперь выбери элементы повестки.')
+            await send_block2_agenda_prompt(state)
+        elif state.step == 'consequences':
+            state.consequences_text = reply
+            await bot.send_message(message.chat.id, '💬 Спасибо! Теперь структурируй EECC.')
+            await send_block2_eecc_prompt(state)
+        elif state.step == 'eecc':
+            state.eecc_text = reply
+            await bot.send_message(message.chat.id, '💬 Принял формат. Предположи возражения.')
+            await send_block2_objections_prompt(state)
+        elif state.step == 'objections':
+            state.objections_text = reply
+            await bot.send_message(message.chat.id, '💬 Спасибо! Осталось выбрать компетенции.')
+            await send_block2_focus_prompt(state)
 
     async def try_set_pending(chat_id: int) -> bool:
         async with pending_lock:
@@ -335,6 +911,16 @@ async def main() -> None:
         if not backend_response:
             return
         actions = backend_response.get("actions") or []
+        legacy_chat_ids: set[int] = set()
+        filtered_actions: list[dict[str, Any]] = []
+        for action in actions:
+            if is_legacy_menu_action(action):
+                chat_id = action.get("chat_id")
+                if isinstance(chat_id, int):
+                    legacy_chat_ids.add(chat_id)
+                continue
+            filtered_actions.append(action)
+        actions = filtered_actions
         best_by_text: dict[tuple[str, str], dict[str, Any]] = {}
         for action in actions:
             if action.get("type") != "send_message":
@@ -400,6 +986,13 @@ async def main() -> None:
                 parse_mode=parse_mode,
             )
             last_sent_signatures[action["chat_id"]] = signature
+        for legacy_chat_id in legacy_chat_ids:
+            context = get_chat_context(legacy_chat_id)
+            if context.get("current_block"):
+                continue
+            await send_post_onboarding_menu(
+                legacy_chat_id, "Что хочешь потренировать дальше?"
+            )
 
     async def answer_backend(
         chat_id: int,
@@ -429,6 +1022,9 @@ async def main() -> None:
         if not text:
             text = "Ответ пустой. Попробуйте ещё раз."
         keyboard = build_keyboard(backend_response.get("keyboard"))
+        if is_legacy_menu_action({"text": text, "keyboard": backend_response.get("keyboard")}):
+            await send_post_onboarding_menu(chat_id, "Что хочешь потренировать дальше?")
+            return
         if message_to_edit and message_to_edit.chat and message_to_edit.message_id:
             try:
                 await bot.edit_message_text(
@@ -452,30 +1048,10 @@ async def main() -> None:
         for text in intro_messages:
             await bot.send_message(message.chat.id, text)
 
-        experience_keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text="Новичок (до года)",
-                        callback_data="action:experience:newbie",
-                    ),
-                ],
-                [
-                    InlineKeyboardButton(
-                        text="1-3 года",
-                        callback_data="action:experience:1-3",
-                    ),
-                    InlineKeyboardButton(
-                        text="3+ лет",
-                        callback_data="action:experience:3plus",
-                    ),
-                ],
-            ]
-        )
         await bot.send_message(
             message.chat.id,
             "Сколько у тебя опыта руководства?",
-            reply_markup=experience_keyboard,
+            reply_markup=build_experience_keyboard(),
         )
 
         payload = build_event_payload(
@@ -502,6 +1078,10 @@ async def main() -> None:
     @dp.message(F.text == "/menu")
     @dp.message(F.text == "/help")
     async def handle_menu(message: Message) -> None:
+        context = get_chat_context(message.chat.id)
+        if context.get("onboarding_done"):
+            await send_post_onboarding_menu(message.chat.id)
+            return
         await bot.send_message(
             message.chat.id,
             "Выберите действие:",
@@ -598,6 +1178,10 @@ async def main() -> None:
 
     @dp.message(F.text)
     async def handle_text(message: Message) -> None:
+        block2_state = block2_states.get(message.chat.id)
+        if block2_state and block2_state.step in {"goal", "consequences", "eecc", "objections"}:
+            await handle_block2_text_input(message, block2_state)
+            return
         if message.text and message.text.startswith("/"):
             return
         if not await try_set_pending(message.chat.id):
@@ -646,22 +1230,276 @@ async def main() -> None:
             return
         loading_message: Message | None = None
         action_name: str | None = None
+        chat_id = callback.message.chat.id if callback.message else 0
         if data.startswith("action:"):
             action_name = data.split("action:", 1)[1]
         else:
             action_name = None
-        if action_name and action_name.startswith("experience:"):
-            chat_id = callback.message.chat.id if callback.message else 0
-            prompt_text = (
-                "Какие встречи тебе предстоят? 🎯\n"
-                "Выбери одну или несколько тем:"
+        if action_name == "post_onboarding_menu":
+            await send_post_onboarding_menu(chat_id)
+            await callback.answer()
+            return
+        if action_name == "start:block1":
+            await begin_block1(chat_id)
+            await callback.answer()
+            return
+        if action_name == "start:block2":
+            await begin_block2(chat_id)
+            await callback.answer()
+            return
+        if action_name == "start:block3":
+            await bot.send_message(chat_id, "Блок 3 пока недоступен.")
+            await callback.answer()
+            return
+        if action_name == "navigation:progress":
+            context = get_chat_context(chat_id)
+            progress_lines = [
+                "📊 Прогресс",
+                f"Блок 1: {'✅' if context.get('block1_completed') else '⏳'}",
+                f"Блок 2: {'✅' if context.get('block2_completed') else '⏳'}",
+                f"Модули разблокированы: {'Да' if context.get('modules_unlocked') else 'Нет'}",
+            ]
+            await bot.send_message(chat_id, "\n".join(progress_lines))
+            await callback.answer()
+            return
+        if action_name == "block2:start":
+            state = block2_states.get(chat_id)
+            if not state:
+                await callback.answer("Сначала начни Блок 2 через меню.", show_alert=True)
+                return
+            await send_block2_scenario(state)
+            await callback.answer()
+            return
+        if action_name and action_name.startswith("block2:scenario:"):
+            parts = action_name.split(":")
+            if len(parts) != 3:
+                await callback.answer()
+                return
+            choice = parts[2]
+            state = block2_states.get(chat_id)
+            if not state:
+                await callback.answer()
+                return
+            if choice == "hint":
+                await callback.answer("Выбирай сценарий по ожиданиям сотрудника и результатам калибровки.", show_alert=True)
+                return
+            if choice not in {key for key, _ in BLOCK2_SCENARIO_OPTIONS}:
+                await callback.answer()
+                return
+            state.scenario_choice = choice
+            await bot.send_message(chat_id, BLOCK2_SCENARIO_FEEDBACK.get(choice, "Отлично!"))
+            await send_block2_goal_prompt(state)
+            await callback.answer()
+            return
+        if action_name == "block2:goal:example":
+            await bot.send_message(chat_id, 'Пример цели: "Подтвердить ценность вклада, обсудить варианты горизонтального развития и согласовать два шага на квартал".')
+            await callback.answer()
+            return
+        if action_name and action_name.startswith("block2:agenda:toggle:"):
+            parts = action_name.split(":")
+            if len(parts) != 4:
+                await callback.answer()
+                return
+            option_key = parts[3]
+            state = block2_states.get(chat_id)
+            if not state or state.step != "agenda":
+                await callback.answer()
+                return
+            option_label = BLOCK2_AGENDA_LABELS.get(option_key)
+            if option_label is None:
+                await callback.answer()
+                return
+            if option_key in state.agenda_selections:
+                state.agenda_selections.remove(option_key)
+            else:
+                state.agenda_selections.add(option_key)
+            if state.agenda_message_id:
+                try:
+                    await bot.edit_message_reply_markup(
+                        chat_id=chat_id,
+                        message_id=state.agenda_message_id,
+                        reply_markup=build_block2_agenda_keyboard(state),
+                        )
+                except TelegramBadRequest:
+                    pass
+            await callback.answer()
+            return
+        if action_name == "block2:agenda:check":
+            state = block2_states.get(chat_id)
+            if not state or not state.agenda_selections:
+                await callback.answer("Выбери хотя бы один пункт.", show_alert=True)
+                return
+            await bot.send_message(
+                chat_id,
+                "Отлично, ты выбрал: "
+                + ", ".join(
+                    BLOCK2_AGENDA_LABELS.get(key, key) for key in state.agenda_selections
+                ),
             )
+            await send_block2_fact_statement(state)
+            await callback.answer()
+            return
+        if action_name and action_name.startswith("block2:fact:"):
+            parts = action_name.split(":")
+            if len(parts) != 4:
+                await callback.answer()
+                return
+            try:
+                fact_index = int(parts[2])
+            except ValueError:
+                await callback.answer()
+                return
+            choice = parts[3]
+            if choice not in {"fact", "interpret"}:
+                await callback.answer()
+                return
+            state = block2_states.get(chat_id)
+            if not state or state.fact_index != fact_index:
+                await callback.answer()
+                return
+            state.facts_answers.append((fact_index, choice))
+            await bot.send_message(
+                chat_id,
+                BLOCK2_FACT_FEEDBACK[choice],
+                reply_markup=build_block2_fact_next_keyboard(),
+            )
+            await callback.answer()
+            return
+        if action_name == "block2:next_fact":
+            state = block2_states.get(chat_id)
+            if not state:
+                await callback.answer()
+                return
+            state.fact_index += 1
+            await send_block2_fact_statement(state)
+            await callback.answer()
+            return
+        if action_name and action_name.startswith("block2:focus:toggle:"):
+            parts = action_name.split(":")
+            if len(parts) != 4:
+                await callback.answer()
+                return
+            option_key = parts[3]
+            state = block2_states.get(chat_id)
+            if not state or state.step != "focus":
+                await callback.answer()
+                return
+            option_label = BLOCK2_FOCUS_LABELS.get(option_key)
+            if option_label is None:
+                await callback.answer()
+                return
+            if option_key in state.focus_selections:
+                state.focus_selections.remove(option_key)
+            else:
+                state.focus_selections.add(option_key)
+            if state.focus_message_id:
+                try:
+                    await bot.edit_message_reply_markup(
+                        chat_id=chat_id,
+                        message_id=state.focus_message_id,
+                        reply_markup=build_block2_focus_keyboard(state),
+                        )
+                except TelegramBadRequest:
+                    pass
+            await callback.answer()
+            return
+        if action_name == "block2:focus:check":
+            state = block2_states.get(chat_id)
+            if not state or not state.focus_selections:
+                await callback.answer("Выбери хотя бы одну компетенцию.", show_alert=True)
+                return
+            await bot.send_message(
+                chat_id,
+                "Сфокусирован на: "
+                + ", ".join(
+                    BLOCK2_FOCUS_LABELS.get(key, key) for key in state.focus_selections
+                ),
+            )
+            await finish_block2(chat_id)
+            await callback.answer()
+            return
+        if action_name and action_name.startswith("block1:hint:"):
+            parts = action_name.split(":")
+            if len(parts) == 3:
+                try:
+                    question_index = int(parts[2])
+                except ValueError:
+                    question_index = None
+                if question_index is not None and 0 <= question_index < len(BLOCK1_QUESTIONS):
+                    hint = BLOCK1_QUESTIONS[question_index].get("hint")
+                    if hint:
+                        await callback.answer(hint, show_alert=True)
+                        return
+            await callback.answer()
+            return
+        if action_name and action_name.startswith("block1:answer:"):
+            parts = action_name.split(":")
+            if len(parts) != 4:
+                await callback.answer()
+                return
+            try:
+                question_index = int(parts[2])
+            except ValueError:
+                await callback.answer()
+                return
+            choice_key = parts[3]
+            state = block1_states.get(chat_id)
+            if not state or state.question_index != question_index:
+                await callback.answer()
+                return
+            question = BLOCK1_QUESTIONS[question_index]
+            answer = next((a for a in question["answers"] if a["key"] == choice_key), None)
+            if not answer:
+                await callback.answer()
+                return
+            if state.question_message_id:
+                try:
+                    await bot.edit_message_reply_markup(
+                        chat_id=chat_id,
+                        message_id=state.question_message_id,
+                        reply_markup=None,
+                    )
+                except TelegramBadRequest:
+                    pass
+            state.answers.append((question_index, choice_key))
+            await bot.send_message(
+                chat_id,
+                answer["feedback"],
+                reply_markup=build_block1_feedback_keyboard(),
+            )
+            await callback.answer()
+            return
+        if action_name == "block1:next":
+            state = block1_states.get(chat_id)
+            if not state:
+                await callback.answer()
+                return
+            state.question_index += 1
+            if state.question_index >= len(BLOCK1_QUESTIONS):
+                await finish_block1(chat_id)
+                await callback.answer()
+                return
+            await send_block1_question(state)
+            await callback.answer()
+            return
+        if action_name == "block1:skip":
+            block1_states.pop(chat_id, None)
+            await send_post_onboarding_menu(chat_id, "Блок 1 пропущен. Что дальше?")
+            await callback.answer()
+            return
+        if action_name and action_name.startswith("experience:"):
+            experience_key = action_name.split("experience:", 1)[1]
+            context = get_chat_context(chat_id)
+            context["experience_level"] = EXPERIENCE_LEVEL_LABELS.get(
+                experience_key, experience_key
+            )
+            context["selected_scenarios"] = []
             if callback.message:
                 try:
                     await bot.edit_message_text(
                         chat_id=chat_id,
                         message_id=callback.message.message_id,
-                        text=prompt_text,
+                        text=MEETING_PROMPT,
                         reply_markup=build_meeting_keyboard(set()),
                     )
                 except TelegramBadRequest:
@@ -718,7 +1556,20 @@ async def main() -> None:
             state.question_index += 1
             if state.question_index >= len(SELF_ASSESSMENT_QUESTIONS):
                 self_assessment_states.pop(chat_id, None)
+                context = get_chat_context(chat_id)
+                readiness = []
+                for idx, key in enumerate(state.answers):
+                    question = SELF_ASSESSMENT_QUESTIONS[idx]
+                    readiness.append(
+                        {
+                            "question": question,
+                            "answer_key": key,
+                            "answer_label": SELF_ASSESSMENT_ANSWER_KEYS[key],
+                        }
+                    )
+                context["skill_readiness"] = readiness
                 await bot.send_message(chat_id, "Спасибо! Я записал ответы и продолжу.")
+                await begin_block1(chat_id)
                 await callback.answer()
                 return
             await send_self_assessment_question(state)
@@ -760,6 +1611,8 @@ async def main() -> None:
                 await callback.answer("Выбери хотя бы одну тему", show_alert=True)
                 return
             meeting_selection_states.pop(chat_id, None)
+            context = get_chat_context(chat_id)
+            context["selected_scenarios"] = sorted(state.selections)
             backend_resp = await send_action_event(
                 user_id=callback.from_user.id,
                 username=callback.from_user.username,
