@@ -1074,6 +1074,15 @@ async def main() -> None:
                 logger.exception("start event failed: %s", exc)
 
         asyncio.create_task(fire_start_event())
+        backend_resp = await send_to_backend(payload)
+        if backend_resp:
+            await answer_backend(message.chat.id, backend_resp)
+        else:
+            await bot.send_message(
+                message.chat.id,
+                settings.default_reply_text,
+                reply_markup=main_menu_keyboard(),
+            )
 
     @dp.message(F.text == "/menu")
     @dp.message(F.text == "/help")

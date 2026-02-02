@@ -32,7 +32,7 @@ class Settings:
     )
     openrouter_base_url: str = field(
         default_factory=lambda: _getenv("OPENROUTER_BASE_URL")
-        or "https://openrouter.ai/api/v1/chat/completions"
+        or "https://api.openai.com/v1/chat/completions"
     )
     openrouter_temperature: float = field(
         default_factory=lambda: float(_getenv("OPENROUTER_TEMPERATURE") or 0.2)

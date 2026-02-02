@@ -122,13 +122,15 @@ class AIClient:
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"AI diagnostic response invalid: {content}") from exc
 
-    async def generate_cases(self, skill: str, sphere: str, num_cases: int = 2) -> List[str]:
+    async def generate_cases(self, skill: str, sphere: str, num_cases: int = 10) -> List[str]:
         if not self.enabled():
             raise RuntimeError("OpenRouter API key not configured")
         prompt = (
-            f"Сформулируй {num_cases} кейса для тренажёра навыка '{skill}' в сфере '{sphere}'. "
-            "Каждый кейс — краткое описание ситуации (1-2 предложения). "
-            "Ответ верни строгим JSON: {\"cases\": [\"кейс1\", \"кейс2\"]} без пояснений."
+            f"Сформулируй {num_cases} кейсов-вопросов для тренажёра навыка '{skill}' в сфере '{sphere}'. "
+            "Каждый кейс — это реалистичная рабочая ситуация с вопросом к пользователю. "
+            "Формат кейса: описание ситуации (2-3 предложения) + вопрос 'Как ты поступишь?' или аналогичный. "
+            "Кейсы должны быть разнообразными, с нарастающей сложностью. "
+            f"Ответ верни строгим JSON: {{\"cases\": [\"кейс1\", \"кейс2\", ..., \"кейс{num_cases}\"]}} без пояснений."
         )
         headers = {
             "Authorization": f"Bearer {self.settings.openrouter_api_key}",
@@ -145,7 +147,7 @@ class AIClient:
         content = data["choices"][0]["message"]["content"]
         try:
             cases = json.loads(content).get("cases", [])
-            return [str(c).strip() for c in cases if str(c).strip()][:num_cases]
+            return [str(c).strip() for c in cases if str(c).strip()][:10]
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"AI cases response invalid: {content}") from exc
 
@@ -199,3 +201,99 @@ class AIClient:
             f"Ответ пользователя: {user_answer}\n"
             "Оцени ответ и верни JSON с действиями (см. формат)."
         )
+
+    async def generate_skill_situation(
+        self,
+        skill_name: str,
+        skill_description: str,
+        theory_doc: str = ""
+    ) -> str:
+        """Generate a training situation for a specific skill."""
+        if not self.enabled():
+            raise RuntimeError("OpenRouter API key not configured")
+        
+        prompt = (
+            f"Сгенерируй реалистичную рабочую ситуацию для тренировки навыка.\n"
+            f"Навык: {skill_name}\n"
+            f"Описание: {skill_description}\n"
+            f"Теоретическая база: {theory_doc}\n\n"
+            "Требования к ситуации:\n"
+            "- 2-3 предложения описания контекста\n"
+            "- Конкретная проблема или вызов\n"
+            "- Вопрос к пользователю 'Как вы поступите?' или аналогичный\n"
+            "- На русском языке\n\n"
+            "Верни только текст ситуации, без JSON и пояснений."
+        )
+        
+        headers = {
+            "Authorization": f"Bearer {self.settings.openrouter_api_key}",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": self.settings.openrouter_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.7,
+        }
+        resp = await self.client.post(self.settings.openrouter_base_url, headers=headers, json=body)
+        resp.raise_for_status()
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        return str(content).strip()
+
+    async def evaluate_skill_answer(
+        self,
+        skill_name: str,
+        skill_description: str,
+        situation: str,
+        user_answer: str,
+        theory_doc: str = ""
+    ) -> Dict[str, Any]:
+        """Evaluate user's answer to a skill training situation."""
+        if not self.enabled():
+            raise RuntimeError("OpenRouter API key not configured")
+        
+        prompt = (
+            f"Оцени ответ пользователя на тренировочную ситуацию.\n\n"
+            f"Навык: {skill_name}\n"
+            f"Описание навыка: {skill_description}\n"
+            f"Теоретическая база: {theory_doc}\n\n"
+            f"Ситуация:\n{situation}\n\n"
+            f"Ответ пользователя:\n{user_answer}\n\n"
+            "Требования к оценке:\n"
+            "1. Оцени по шкале 1-10, где:\n"
+            "   - 1-3: ответ не соответствует навыку, нет конкретики\n"
+            "   - 4-6: частично правильно, но есть пробелы\n"
+            "   - 7-8: хороший ответ с конкретикой\n"
+            "   - 9-10: отличный ответ, демонстрирует глубокое понимание\n"
+            "2. Дай конструктивную обратную связь на русском языке\n"
+            "3. Укажи сильные стороны ответа\n"
+            "4. Укажи что можно улучшить\n\n"
+            'Верни строго JSON: {"score": <число 1-10>, "feedback": "<текст обратной связи>"}'
+        )
+        
+        headers = {
+            "Authorization": f"Bearer {self.settings.openrouter_api_key}",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": self.settings.openrouter_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+        }
+        resp = await self.client.post(self.settings.openrouter_base_url, headers=headers, json=body)
+        resp.raise_for_status()
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        
+        try:
+            result = json.loads(content)
+            return {
+                "score": int(result.get("score", 5)),
+                "feedback": str(result.get("feedback", "Спасибо за ответ."))
+            }
+        except Exception:
+            # If JSON parsing fails, extract what we can
+            return {
+                "score": 5,
+                "feedback": content if len(content) < 1000 else content[:1000]
+            }
